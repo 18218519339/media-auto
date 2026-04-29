@@ -1,0 +1,4 @@
+
+> media-automation-admin@0.1.0 dev
+> vite --config vite.config.js --host 127.0.0.1 --port 5173
+

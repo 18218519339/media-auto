@@ -1,0 +1,9 @@
+cryptography==42.0.7
+beautifulsoup4==4.12.3
+fastapi==0.109.0
+httpx==0.26.0
+lxml==5.1.0
+pydantic==2.5.3
+pytest==7.4.3
+sqlalchemy==2.0.25
+uvicorn==0.27.0

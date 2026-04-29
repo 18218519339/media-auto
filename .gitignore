@@ -1,0 +1,11 @@
+.analysis/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.db
+media_automation.db
+node_modules/
+dist/
+.env
+.venv/
+npm-debug.log*
