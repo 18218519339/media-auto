@@ -48,13 +48,24 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
             self.app_secret = app_secret
         def upload_cover_image(self, image_path=None):
             return "fake-thumb-media-id"
+        def upload_image_bytes(self, image_data, img_type="image"):
+            return "fake-thumb-media-id"
         def add_draft(self, **kwargs):
             return f"fake-media-id-{kwargs.get('title', 'unknown')[:10]}"
         def publish_draft(self, media_id, timeout=60):
             return {"publish_id": "fake-publish-id", "article_id": "fake-article-id", "url": "https://mp.weixin.qq.com/s/fake"}
 
+    class FakeGeneratedImage:
+        def __init__(self):
+            self.url = "https://example.com/fake-cover.png"
+            self.b64_json = None
+
     import app.wechat_client as wc
     monkeypatch.setattr(wc, "WeChatClient", FakeWeChatClient)
+
+    import app.image_generator as ig
+    monkeypatch.setattr(ig, "generate_wechat_cover", lambda title, summary: FakeGeneratedImage())
+    monkeypatch.setattr(ig, "download_image_bytes", lambda url: b"fake-image-bytes")
 
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",

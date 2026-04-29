@@ -458,6 +458,7 @@ def get_default_wechat_account(db: Session) -> WechatAccount:
 def save_wechat_draft(db: Session, draft_id: int) -> Draft:
     from app.wechat_client import WeChatAPIError as WeChatErr, WeChatClient
     from app.security import decrypt_secret
+    from app.image_generator import ImageGenError, generate_wechat_cover, download_image_bytes
 
     draft = db.get(Draft, draft_id)
     if not draft:
@@ -469,8 +470,18 @@ def save_wechat_draft(db: Session, draft_id: int) -> Draft:
         raise HTTPException(status_code=400, detail="公众号草稿必须先审核通过")
     transition_status(draft, "wechat_draft_saving")
     try:
+        # 1. Generate cover image using Kimi
+        img = generate_wechat_cover(draft.title, draft.summary)
+        image_bytes = download_image_bytes(img.url) if img.url else img.b64_json.encode("utf-8")
+        if img.b64_json:
+            import base64
+            image_bytes = base64.b64decode(img.b64_json)
+
+        # 2. Upload to WeChat to get thumb_media_id
         client = WeChatClient(account.app_id, decrypt_secret(account.encrypted_app_secret))
-        thumb_media_id = client.upload_cover_image()
+        thumb_media_id = client.upload_image_bytes(image_bytes)
+
+        # 3. Add draft with the cover
         media_id = client.add_draft(
             title=draft.title,
             author=None,
@@ -478,6 +489,18 @@ def save_wechat_draft(db: Session, draft_id: int) -> Draft:
             content=draft.body_html,
             thumb_media_id=thumb_media_id,
         )
+    except ImageGenError as exc:
+        transition_status(draft, "failed")
+        log_event(
+            db,
+            stage="image_gen_failed",
+            message=f"生成封面图失败：{exc.message}",
+            source_id=draft.source_id,
+            draft_id=draft.id,
+            error_code="IMAGE_GEN_FAILED",
+        )
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"生成封面图失败：{exc.message}") from exc
     except WeChatErr as exc:
         transition_status(draft, "failed")
         log_event(

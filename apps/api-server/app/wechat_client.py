@@ -86,15 +86,10 @@ class WeChatClient:
         )
         return self._token.access_token
 
-    def upload_cover_image(self, image_path: str | None = None) -> str:
+    def upload_image_bytes(self, image_data: bytes, img_type: str = "image") -> str:
+        """Upload raw image bytes to WeChat and return media_id."""
         token = self.get_access_token()
-        url = f"{WECHAT_API_BASE}/cgi-bin/media/upload?access_token={token}&type=image"
-
-        if image_path:
-            with open(image_path, "rb") as f:
-                image_data = f.read()
-        else:
-            image_data = self._default_cover_bytes()
+        url = f"{WECHAT_API_BASE}/cgi-bin/media/upload?access_token={token}&type={img_type}"
 
         tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
         try:
@@ -117,6 +112,14 @@ class WeChatClient:
                     pass
         finally:
             os.unlink(tmp.name)
+
+    def upload_cover_image(self, image_path: str | None = None) -> str:
+        if image_path:
+            with open(image_path, "rb") as f:
+                image_data = f.read()
+        else:
+            image_data = self._default_cover_bytes()
+        return self.upload_image_bytes(image_data)
 
     def _default_cover_bytes(self) -> bytes:
         return base64.b64decode(
