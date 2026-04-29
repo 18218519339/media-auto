@@ -19,6 +19,7 @@ from app.wechat_rewrite_policy import (
 
 LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-cp-U0PpeSIHuauE45_PHxlHTmkaEW3UwGP1Cr6MMPStJbJPr8wbv2uK7frOExrcaeNEKkAN_kWqfoccW8QfBSR2QBQT7QQ0TPGrTELD4Qi9yxccY-fHwttWD_E")
 LLM_API_BASE = os.getenv("LLM_API_BASE", "https://api.minimax.chat/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "MiniMax-M2.7")
 
 
 class LLMRewriteError(RuntimeError):
@@ -49,7 +50,7 @@ def _llm_request(endpoint: str, payload: dict) -> dict:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as response:
+        with urllib.request.urlopen(req, timeout=90) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8")
@@ -94,7 +95,7 @@ def rewrite_wechat_article(
     temperature = _env_float("LLM_TEMPERATURE", 0.35)
 
     payload = {
-        "model": "MiniMax-Text-01",
+        "model": LLM_MODEL,
         "messages": build_wechat_messages(
             snapshot,
             rewrite_strength=rewrite_strength,
@@ -103,7 +104,7 @@ def rewrite_wechat_article(
         "temperature": temperature,
     }
     try:
-        completion = _llm_request("/text/chatcompletion_v2", payload)
+        completion = _llm_request("/chat/completions", payload)
         content = completion["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
         raise LLMRewriteError(f"模型接口返回格式错误：{exc}") from exc
