@@ -17,8 +17,8 @@ from app.wechat_rewrite_policy import (
 )
 
 
-KIMI_API_KEY = os.getenv("KIMI_API_KEY", "")
-KIMI_API_BASE = os.getenv("KIMI_API_BASE", "https://api.moonshot.cn/v1")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-cp-U0PpeSIHuauE45_PHxlHTmkaEW3UwGP1Cr6MMPStJbJPr8wbv2uK7frOExrcaeNEKkAN_kWqfoccW8QfBSR2QBQT7QQ0TPGrTELD4Qi9yxccY-fHwttWD_E")
+LLM_API_BASE = os.getenv("LLM_API_BASE", "https://api.minimax.chat/v1")
 
 
 class LLMRewriteError(RuntimeError):
@@ -33,11 +33,11 @@ def _env_float(name: str, default: float) -> float:
 
 
 def is_llm_configured() -> bool:
-    return bool(KIMI_API_KEY)
+    return bool(LLM_API_KEY)
 
 
-def _kimi_request(endpoint: str, payload: dict) -> dict:
-    url = f"{KIMI_API_BASE}{endpoint}"
+def _llm_request(endpoint: str, payload: dict) -> dict:
+    url = f"{LLM_API_BASE}{endpoint}"
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -45,7 +45,7 @@ def _kimi_request(endpoint: str, payload: dict) -> dict:
         method="POST",
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {KIMI_API_KEY}",
+            "Authorization": f"Bearer {LLM_API_KEY}",
         },
     )
     try:
@@ -88,13 +88,13 @@ def rewrite_wechat_article(
     rewrite_strength: int,
     style_reference_url: str | None,
 ) -> WechatArticle:
-    if not KIMI_API_KEY:
-        raise LLMRewriteError("未配置 KIMI_API_KEY，无法调用模型改写")
+    if not LLM_API_KEY:
+        raise LLMRewriteError("未配置 LLM_API_KEY，无法调用模型改写")
 
-    temperature = _env_float("KIMI_TEMPERATURE", 0.35)
+    temperature = _env_float("LLM_TEMPERATURE", 0.35)
 
     payload = {
-        "model": "moonshot-v1-8k",
+        "model": "MiniMax-Text-01",
         "messages": build_wechat_messages(
             snapshot,
             rewrite_strength=rewrite_strength,
@@ -103,10 +103,10 @@ def rewrite_wechat_article(
         "temperature": temperature,
     }
     try:
-        completion = _kimi_request("/chat/completions", payload)
+        completion = _llm_request("/text/chatcompletion_v2", payload)
         content = completion["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        raise LLMRewriteError("模型接口返回格式错误") from exc
+        raise LLMRewriteError(f"模型接口返回格式错误：{exc}") from exc
 
     result = _extract_json_object(str(content))
     try:
