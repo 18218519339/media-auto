@@ -416,50 +416,88 @@ def approve_draft(db: Session, draft_id: int) -> Draft:
 
 
 def upsert_wechat_account(db: Session, payload: Any) -> tuple[WechatAccount, str]:
-    existing = db.execute(select(WechatAccount).where(WechatAccount.app_id == payload.app_id)).scalar_one_or_none()
-    encrypted = encrypt_secret(payload.app_secret)
+    name = payload.name.strip() if hasattr(payload, 'name') else payload.name
+    app_id = payload.app_id.strip() if hasattr(payload, 'app_id') else payload.app_id
+    app_secret = payload.app_secret.strip() if hasattr(payload, 'app_secret') else payload.app_secret
+
+    existing = db.execute(select(WechatAccount).where(WechatAccount.app_id == app_id)).scalar_one_or_none()
+    encrypted = encrypt_secret(app_secret)
     if existing:
-        existing.name = payload.name
+        existing.name = name
         existing.encrypted_app_secret = encrypted
         existing.ip_allowlist_status = payload.ip_allowlist_status
         existing.connection_status = "configured"
         account = existing
     else:
         account = WechatAccount(
-            name=payload.name,
-            app_id=payload.app_id,
+            name=name,
+            app_id=app_id,
             encrypted_app_secret=encrypted,
             ip_allowlist_status=payload.ip_allowlist_status,
             connection_status="configured",
         )
         db.add(account)
     db.flush()
-    log_event(db, stage="wechat_account_configured", message=f"公众号配置已保存：{payload.name}")
+    log_event(db, stage="wechat_account_configured", message=f"公众号配置已保存：{name}")
     db.commit()
     db.refresh(account)
-    return account, mask_secret(payload.app_secret)
+    return account, mask_secret(app_secret)
+
+
+def get_default_wechat_account(db: Session) -> WechatAccount:
+    account = db.execute(
+        select(WechatAccount)
+        .where(WechatAccount.connection_status == "configured")
+        .order_by(WechatAccount.created_at.desc())
+    ).scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=400, detail="请先配置公众号 AppID/AppSecret")
+    return account
 
 
 def save_wechat_draft(db: Session, draft_id: int) -> Draft:
+    from app.wechat_client import WeChatAPIError as WeChatErr, WeChatClient
+    from app.security import decrypt_secret
+
     draft = db.get(Draft, draft_id)
     if not draft:
         raise HTTPException(status_code=404, detail="草稿不存在")
     if draft.target_platform != "wechat":
         raise HTTPException(status_code=400, detail="只有公众号草稿支持保存到公众号草稿箱")
-    account = db.execute(select(WechatAccount)).scalar_one_or_none()
-    if not account:
-        raise HTTPException(status_code=400, detail="请先配置公众号 AppID/AppSecret")
+    account = get_default_wechat_account(db)
     if draft.status != "approved":
         raise HTTPException(status_code=400, detail="公众号草稿必须先审核通过")
     transition_status(draft, "wechat_draft_saving")
-    draft.wechat_draft_media_id = f"wechat-draft-{draft.id}-{account.id}"
+    try:
+        client = WeChatClient(account.app_id, decrypt_secret(account.encrypted_app_secret))
+        thumb_media_id = client.upload_cover_image()
+        media_id = client.add_draft(
+            title=draft.title,
+            author=None,
+            digest=draft.summary[:54],
+            content=draft.body_html,
+            thumb_media_id=thumb_media_id,
+        )
+    except WeChatErr as exc:
+        transition_status(draft, "failed")
+        log_event(
+            db,
+            stage="wechat_draft_failed",
+            message=f"保存公众号草稿失败：{exc.errmsg}",
+            source_id=draft.source_id,
+            draft_id=draft.id,
+            error_code=f"WECHAT_{exc.errcode}",
+        )
+        db.commit()
+        raise HTTPException(status_code=502, detail=f"微信接口调用失败：{exc.errmsg}") from exc
+    draft.wechat_draft_media_id = media_id
     transition_status(draft, "wechat_draft_saved")
     if draft.source:
         draft.source.status = "wechat_draft_saved"
     log_event(
         db,
         stage="wechat_draft_saved",
-        message="公众号草稿已保存到草稿箱（本地 fake adapter）",
+        message=f"公众号草稿已保存到草稿箱，media_id：{media_id}",
         source_id=draft.source_id,
         draft_id=draft.id,
     )
@@ -543,15 +581,16 @@ def run_due_publish_jobs(db: Session, now: datetime | None = None) -> tuple[int,
     return len(task_ids), task_ids
 
 
-def get_next_openclaw_task(db: Session) -> OpenClawTask | None:
-    task = db.execute(
-        select(OpenClawTask).where(OpenClawTask.status == "pending").order_by(OpenClawTask.created_at).limit(1)
-    ).scalar_one_or_none()
+def get_next_openclaw_task(db: Session, task_type: str | None = None) -> OpenClawTask | None:
+    query = select(OpenClawTask).where(OpenClawTask.status == "pending")
+    if task_type:
+        query = query.where(OpenClawTask.task_type == task_type)
+    task = db.execute(query.order_by(OpenClawTask.created_at).limit(1)).scalar_one_or_none()
     if not task:
         return None
     task.status = "running"
     task.attempts += 1
-    log_event(db, stage="openclaw_task_claimed", message="OpenClaw worker 已领取任务", openclaw_task_id=task.id)
+    log_event(db, stage="openclaw_task_claimed", message=f"OpenClaw worker 已领取任务（{task.task_type}）", openclaw_task_id=task.id)
     db.commit()
     db.refresh(task)
     return task

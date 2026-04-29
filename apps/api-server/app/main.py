@@ -119,8 +119,8 @@ def create_app() -> FastAPI:
         return SchedulerRunResponse(triggered_count=count, task_ids=task_ids)
 
     @app.get("/api/openclaw/tasks/next", response_model=OpenClawTaskOut | None)
-    def openclaw_next_task_endpoint(db: Session = Depends(get_db)) -> OpenClawTaskOut | None:
-        task = get_next_openclaw_task(db)
+    def openclaw_next_task_endpoint(task_type: str | None = None, db: Session = Depends(get_db)) -> OpenClawTaskOut | None:
+        task = get_next_openclaw_task(db, task_type=task_type)
         return serialize_openclaw_task(task) if task else None
 
     @app.post("/api/openclaw/tasks/{task_id}/events", response_model=OpenClawTaskOut)

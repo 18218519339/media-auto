@@ -41,6 +41,21 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
             keywords=["HBM3E", "CoWoS", "DRAM现货价格"],
         ),
     )
+
+    class FakeWeChatClient:
+        def __init__(self, app_id, app_secret):
+            self.app_id = app_id
+            self.app_secret = app_secret
+        def upload_cover_image(self, image_path=None):
+            return "fake-thumb-media-id"
+        def add_draft(self, **kwargs):
+            return f"fake-media-id-{kwargs.get('title', 'unknown')[:10]}"
+        def publish_draft(self, media_id, timeout=60):
+            return {"publish_id": "fake-publish-id", "article_id": "fake-article-id", "url": "https://mp.weixin.qq.com/s/fake"}
+
+    import app.wechat_client as wc
+    monkeypatch.setattr(wc, "WeChatClient", FakeWeChatClient)
+
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -104,7 +119,7 @@ def test_wechat_source_can_generate_save_draft_schedule_and_log(client: TestClie
     save_response = client.post(f"/api/drafts/{draft_id}/save-wechat-draft")
     assert save_response.status_code == 200
     assert save_response.json()["status"] == "wechat_draft_saved"
-    assert save_response.json()["wechat_draft_media_id"].startswith("wechat-draft-")
+    assert save_response.json()["wechat_draft_media_id"] and "fake" in save_response.json()["wechat_draft_media_id"]
 
     publish_at = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
     schedule_response = client.post(
