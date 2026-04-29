@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
-
-import httpx
 
 from app.link_reader import LinkSnapshot
 from app.wechat_rewrite_policy import (
@@ -14,6 +15,10 @@ from app.wechat_rewrite_policy import (
     build_wechat_messages,
     validate_wechat_article,
 )
+
+
+KIMI_API_KEY = os.getenv("KIMI_API_KEY", "")
+KIMI_API_BASE = os.getenv("KIMI_API_BASE", "https://api.moonshot.cn/v1")
 
 
 class LLMRewriteError(RuntimeError):
@@ -28,14 +33,33 @@ def _env_float(name: str, default: float) -> float:
 
 
 def is_llm_configured() -> bool:
-    return bool(os.getenv("LLM_API_KEY"))
+    return bool(KIMI_API_KEY)
 
 
-def _completion_url(base_url: str) -> str:
-    stripped = base_url.rstrip("/")
-    if stripped.endswith("/chat/completions"):
-        return stripped
-    return f"{stripped}/chat/completions"
+def _kimi_request(endpoint: str, payload: dict) -> dict:
+    url = f"{KIMI_API_BASE}{endpoint}"
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {KIMI_API_KEY}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        try:
+            err = json.loads(body)
+            raise LLMRewriteError(f"{err.get('error', {}).get('message', body)}")
+        except json.JSONDecodeError:
+            raise LLMRewriteError(body) from exc
+    except urllib.error.URLError as exc:
+        raise LLMRewriteError(f"网络请求失败：{exc.reason}") from exc
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -64,49 +88,25 @@ def rewrite_wechat_article(
     rewrite_strength: int,
     style_reference_url: str | None,
 ) -> WechatArticle:
-    api_key = os.getenv("LLM_API_KEY")
-    if not api_key:
-        raise LLMRewriteError("未配置 LLM_API_KEY，无法调用模型改写")
+    if not KIMI_API_KEY:
+        raise LLMRewriteError("未配置 KIMI_API_KEY，无法调用模型改写")
 
-    base_url = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-    model = os.getenv("LLM_MODEL", "gpt-4o-mini")
-    timeout = _env_float("LLM_TIMEOUT_SECONDS", 45)
-    temperature = _env_float("LLM_TEMPERATURE", 0.35)
+    temperature = _env_float("KIMI_TEMPERATURE", 0.35)
 
     payload = {
-        "model": model,
+        "model": "moonshot-v1-8k",
         "messages": build_wechat_messages(
             snapshot,
             rewrite_strength=rewrite_strength,
             style_reference_url=style_reference_url,
         ),
         "temperature": temperature,
-        "response_format": {"type": "json_object"},
     }
     try:
-        with httpx.Client(timeout=timeout, trust_env=False) as client:
-            response = client.post(
-                _completion_url(base_url),
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-    except httpx.TimeoutException as exc:
-        raise LLMRewriteError("模型改写请求超时") from exc
-    except httpx.HTTPError as exc:
-        raise LLMRewriteError(f"模型改写请求失败：{exc}") from exc
-
-    if response.status_code >= 400:
-        detail = response.text[:300]
-        raise LLMRewriteError(f"模型接口返回 HTTP {response.status_code}：{detail}")
-
-    try:
-        completion = response.json()
+        completion = _kimi_request("/chat/completions", payload)
         content = completion["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-        raise LLMRewriteError("模型接口返回格式不符合 OpenAI-compatible chat/completions") from exc
+        raise LLMRewriteError("模型接口返回格式错误") from exc
 
     result = _extract_json_object(str(content))
     try:

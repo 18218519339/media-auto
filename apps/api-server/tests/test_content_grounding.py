@@ -303,7 +303,9 @@ def test_openclaw_rejects_empty_or_unrelated_rewrite_result(monkeypatch: pytest.
 
 
 def test_llm_rewrite_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    monkeypatch.setenv("KIMI_API_KEY", "")
+    import app.llm_rewrite_adapter as llm_adapter
+    llm_adapter.KIMI_API_KEY = ""
     snapshot = LinkSnapshot(
         url="https://mp.weixin.qq.com/s/pro6000d",
         title="Pro 6000D 滞销观察",
@@ -313,7 +315,7 @@ def test_llm_rewrite_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
         keywords=["Pro 6000D", "Blackwell", "HBM", "GDDR7", "算力"],
     )
 
-    with pytest.raises(LLMRewriteError, match="LLM_API_KEY"):
+    with pytest.raises(LLMRewriteError, match="KIMI_API_KEY"):
         rewrite_wechat_article(snapshot, rewrite_strength=7, style_reference_url=None)
 
 
